@@ -1,0 +1,6 @@
+/vendor/
+/composer.lock
+/.phpunit.cache/
+/.phpunit.result.cache
+# Resmî rehber, şema ve API arşivleri depoya girmez (bkz. README, "Kaynaklar")
+/docs/kaynak/

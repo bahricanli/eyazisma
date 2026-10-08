@@ -1,0 +1,62 @@
+{
+    "name": "bahricanli/eyazisma",
+    "description": "e-Yazışma Paketi (EYP 2.x) oluşturma, okuma ve doğrulama; Laravel desteğiyle",
+    "keywords": [
+        "eyazisma",
+        "e-yazışma",
+        "eyp",
+        "ebys",
+        "resmi yazışma",
+        "laravel"
+    ],
+    "homepage": "https://github.com/bahricanli/eyazisma",
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Bahri Meriç Canlı",
+            "email": "bahri@bahri.info",
+            "homepage": "https://www.bahri.info",
+            "role": "Developer"
+        }
+    ],
+    "require": {
+        "php": "^8.2",
+        "ext-dom": "*",
+        "ext-libxml": "*",
+        "ext-zlib": "*"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^9.0 || ^10.0 || ^11.0",
+        "phpunit/phpunit": "^11.0 || ^12.0"
+    },
+    "suggest": {
+        "illuminate/support": "Laravel servis sağlayıcısı ve facade için (^10.0 || ^11.0 || ^12.0 || ^13.0)"
+    },
+    "autoload": {
+        "psr-4": {
+            "BahriCanli\\EYazisma\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "BahriCanli\\EYazisma\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "vendor/bin/phpunit"
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "BahriCanli\\EYazisma\\Laravel\\EYazismaServiceProvider"
+            ],
+            "aliases": {
+                "EYazisma": "BahriCanli\\EYazisma\\Laravel\\Facades\\EYazisma"
+            }
+        }
+    }
+}
