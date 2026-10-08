@@ -19,6 +19,13 @@ final class Ad
 
     public const PARAF_OZETI = 'urn:dpt:eyazisma:schema:xsd:ParafOzeti-2';
 
+    /** Ad alanlarının 2.0 öncesi (1.x) karşılıkları. */
+    public const USTVERI_1 = 'urn:dpt:eyazisma:schema:xsd:Ustveri-1';
+
+    public const PAKET_OZETI_1 = 'urn:dpt:eyazisma:schema:xsd:PaketOzeti-1';
+
+    public const NIHAI_OZET_1 = 'urn:dpt:eyazisma:schema:xsd:NihaiOzet-1';
+
     public const CORE = 'http://schemas.openxmlformats.org/package/2006/metadata/core-properties';
 
     public const DC = 'http://purl.org/dc/elements/1.1/';
@@ -48,6 +55,12 @@ final class Ad
     public const ILISKI_PARAF_IMZA = 'http://eyazisma.dpt/iliskiler/parafimzacades';
 
     public const ILISKI_MUHUR = 'http://eyazisma.dpt/iliskiler/muhurcades';
+
+    /** 1.x paketlerde ve şifreli paketlerde: paketin elektronik olarak iletileceği alıcılar. */
+    public const ILISKI_BELGE_HEDEF = 'http://eyazisma.dpt/iliskiler/belgehedef';
+
+    /** Yalnız 1.x paketlerde: belgedeki imzalara ilişkin bilgi. */
+    public const ILISKI_BELGE_IMZA = 'http://eyazisma.dpt/iliskiler/belgeimza';
 
     public const ILISKI_CORE = 'http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties';
 
@@ -82,6 +95,18 @@ final class Ad
             'PaketOzeti' => self::PAKET_OZETI,
             'NihaiOzet' => self::NIHAI_OZET,
             'ParafOzeti' => self::PARAF_OZETI,
+        };
+    }
+
+    /**
+     * Özet bileşeninin 1.x paketlerdeki ad alanı; 1.x'te karşılığı yoksa null.
+     */
+    public static function eskiOzet(string $kok): ?string
+    {
+        return match ($kok) {
+            'PaketOzeti' => self::PAKET_OZETI_1,
+            'NihaiOzet' => self::NIHAI_OZET_1,
+            default => null,
         };
     }
 }

@@ -5,6 +5,7 @@ namespace BahriCanli\EYazisma\Dogrulama;
 use BahriCanli\EYazisma\Enums\EkTuru;
 use BahriCanli\EYazisma\Enums\OzetAlgoritmasi;
 use BahriCanli\EYazisma\Enums\Seviye;
+use BahriCanli\EYazisma\Enums\Surum;
 use BahriCanli\EYazisma\Exceptions\EYazismaException;
 use BahriCanli\EYazisma\Guid;
 use BahriCanli\EYazisma\Model\OzetReferansi;
@@ -16,7 +17,8 @@ use BahriCanli\EYazisma\Xml\Ad;
 use BahriCanli\EYazisma\Xml\Okuyucu;
 
 /**
- * Şifresiz e-Yazışma Paketini rehberin kurallar listesine (K.1–K.100) göre denetler.
+ * Şifresiz e-Yazışma Paketini rehberin kurallar listesine (K.1–K.100) göre denetler. 2.0 öncesi
+ * paketlerde o kuşağın gevşek kuralları uygulanır: tek özet yeter, nihai özet ve mühür zorunlu değildir.
  *
  * Yapı, ilişkiler, üstveri tutarlılığı ve özet değerleri denetlenir. İmza ve mührün kriptografik
  * doğrulaması (sertifika zinciri, iptal durumu, zaman damgası, CAdES profili) kapsam dışıdır.
@@ -30,11 +32,15 @@ final class Dogrulayici
 
     private Package $opc;
 
+    /** 2.0 öncesi paket: tek özet, nihai üstveri yok, mühür ve nihai özet isteğe bağlı. */
+    private bool $eski = false;
+
     public function dogrula(Paket $paket): Rapor
     {
         $this->bulgular = [];
         $this->paket = $paket;
         $this->opc = $paket->opc();
+        $this->eski = $paket->surum() === Surum::V1;
 
         $ustveri = $this->ustveri();
         $this->ustYazi($ustveri);
@@ -46,8 +52,13 @@ final class Dogrulayici
 
         $this->paketOzeti($ustveri);
         $imzali = $this->imza();
-        $this->nihaiUstveri($imzali);
-        $this->nihaiOzet($ustveri, $imzali);
+
+        if ($this->eski) {
+            $this->eskiNihaiOzet($ustveri);
+        } else {
+            $this->nihaiUstveri($imzali);
+            $this->nihaiOzet($ustveri, $imzali);
+        }
 
         return new Rapor($this->bulgular);
     }
@@ -82,7 +93,7 @@ final class Dogrulayici
             $this->hata('K.19', 'OzId verildiğinde schemeID değeri de tanımlanmalıdır.');
         }
 
-        if ($ustveri->dogrulamaAdresi === '') {
+        if (! $this->eski && $ustveri->dogrulamaAdresi === '') {
             $this->hata('K.19', '"Üstveri" bileşeninde doğrulama adresi bulunmalıdır.');
         }
 
@@ -228,10 +239,39 @@ final class Dogrulayici
         $this->ozet($ad, 'PaketOzeti', 'Paket Özeti', $ustveri, haricilerOlabilir: true, kurallar: ['yapi' => 'K.29', 'id' => 'K.34', 'icerik' => 'K.33'], zorunlular: array_filter([
             $this->paket->bilesenAdi(Ad::ILISKI_USTVERI),
             $this->paket->bilesenAdi(Ad::ILISKI_USTYAZI),
+            $this->eski ? $this->paket->bilesenAdi(Ad::ILISKI_BELGE_HEDEF) : null,
             $parafOzeti,
             $this->paket->bilesenAdi(Ad::ILISKI_PARAF_IMZA, $parafOzeti),
             ...$this->paket->imzaliEkBilesenleri(),
         ]));
+    }
+
+    /**
+     * 1.x'te nihai özet zorunlu değildir; varsa özetleri denetlenir. Mühür de isteğe bağlıdır.
+     */
+    private function eskiNihaiOzet(?Ustveri $ustveri): void
+    {
+        $ad = $this->tekBilesen(Ad::ILISKI_NIHAI_OZET, 'Nihai Özet', null, zorunlu: false);
+
+        if ($ad === null) {
+            return;
+        }
+
+        $paketOzeti = $this->paket->bilesenAdi(Ad::ILISKI_PAKET_OZETI);
+
+        $this->ozet($ad, 'NihaiOzet', 'Nihai Özet', $ustveri, haricilerOlabilir: false, kurallar: ['yapi' => 'K.39', 'id' => 'K.44', 'icerik' => 'K.43'], zorunlular: array_filter([
+            $this->paket->bilesenAdi(Ad::ILISKI_USTVERI),
+            $this->paket->bilesenAdi(Ad::ILISKI_USTYAZI),
+            $paketOzeti,
+            $this->paket->bilesenAdi(Ad::ILISKI_IMZA, $paketOzeti),
+            ...$this->paket->imzaliEkBilesenleri(),
+        ]));
+
+        $muhur = $this->paket->muhur();
+
+        if ($muhur !== null) {
+            $this->tumlesikImza($muhur, $this->opc->get($ad), 'Elektronik Mühür', 'Nihai Özet', 'K.100');
+        }
     }
 
     private function imza(): bool
@@ -411,6 +451,22 @@ final class Dogrulayici
         $algoritmalar = array_map(fn ($ozet) => $ozet->algoritma, $referans->ozetler);
         $taninmayanlar = array_filter($algoritmalar, fn (string $algoritma) => OzetAlgoritmasi::tryFrom($algoritma) === null);
 
+        if ($this->eski) {
+            if ($algoritmalar === [] || $taninmayanlar !== []) {
+                $this->hata(null, "\"{$etiket}\" bileşeninde özet yok ya da algoritması tanınmıyor: {$referans->uri}");
+
+                return false;
+            }
+
+            return true;
+        }
+
+        if (in_array(OzetAlgoritmasi::Sha1->value, $algoritmalar, true)) {
+            $this->hata(null, "\"{$etiket}\" bileşeninde SHA-1 kullanılamaz: {$referans->uri}");
+
+            return false;
+        }
+
         if (count($algoritmalar) !== 2 || count(array_unique($algoritmalar)) !== 2 || ! in_array(OzetAlgoritmasi::Sha512->value, $algoritmalar, true)) {
             $this->hata(null, "\"{$etiket}\" bileşeninde her bileşen için farklı algoritmalarla iki özet bulunmalı, biri SHA-512 olmalıdır: {$referans->uri}");
 
@@ -464,7 +520,7 @@ final class Dogrulayici
     {
         if (! Guid::gecerliMi($deger)) {
             $this->hata(null, "{$etiket} bir GUID olmalıdır: {$deger}");
-        } elseif ($deger !== strtoupper($deger)) {
+        } elseif (! $this->eski && $deger !== strtoupper($deger)) {
             $this->hata('K.80', "{$etiket} büyük harfle yazılmalıdır: {$deger}");
         }
     }

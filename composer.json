@@ -1,6 +1,6 @@
 {
     "name": "bahricanli/eyazisma",
-    "description": "e-Yazışma Paketi (EYP 2.x) oluşturma, okuma ve doğrulama; Laravel desteğiyle",
+    "description": "e-Yazışma Paketi (EYP 2.x ve 1.x) oluşturma, okuma ve doğrulama; Laravel desteğiyle",
     "keywords": [
         "eyazisma",
         "e-yazışma",

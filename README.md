@@ -1,6 +1,6 @@
 # bahricanli/eyazisma
 
-PHP ile **e-Yazışma Paketi** (EYP 2.x, `.eyp`) oluşturma, okuma ve doğrulama. Çekirdek saf PHP'dir; Laravel için servis sağlayıcı ve facade ile gelir.
+PHP ile **e-Yazışma Paketi** (`.eyp`) oluşturma, okuma ve doğrulama: güncel 2.x ve hâlâ dolaşımda olan 2.0 öncesi (1.x) paketler. Çekirdek saf PHP'dir; Laravel için servis sağlayıcı ve facade ile gelir.
 
 Paket yapısı Cumhurbaşkanlığı'nın yayımladığı [e-Yazışma Teknik Rehberi](https://www.tccb.gov.tr/resmiyazisma/eyp/dokumanlar/) sürüm 2.0 / 2.1'e göre üretilir.
 
@@ -8,12 +8,12 @@ Paket yapısı Cumhurbaşkanlığı'nın yayımladığı [e-Yazışma Teknik Reh
 
 | Yapar | Yapmaz |
 |---|---|
-| Şifresiz EYP 2.x paketi üretir: üst yazı, üstveri, ekler, `Core`, paket özeti, nihai üstveri, nihai özet | Elektronik imza ya da mühür **üretmez**; dışarıda atılan CAdES imzayı pakete ekler |
+| Şifresiz paket üretir: üst yazı, üstveri, ekler, `Core`, özetler; 2.x ya da 1.x yapısında | Elektronik imza ya da mühür **üretmez**; dışarıda atılan CAdES imzayı pakete ekler |
 | Paketi okur: üstveri, nihai üstveri, üst yazı, ek dosyaları, imza ve mühür | İmzayı kriptografik olarak **doğrulamaz** (sertifika zinciri, iptal, zaman damgası, CAdES profili) |
-| Paketi rehberin kurallar listesine göre denetler, özet değerlerini yeniden hesaplar | Şifreli paket (`.eyps`), güncelleme paketi (`.eypg`) ve 1.x paketleri işlemez |
+| Paketi rehberin kurallar listesine göre denetler, özet değerlerini yeniden hesaplar | Şifreli paket (`.eyps`) ve güncelleme paketini (`.eypg`) işlemez |
 | Paketi imza adımları arasında kaydedip sürdürür | Paraf özeti ve paraf imzası üretmez (okuduğu pakette varsa özet denetimlerinde hesaba katar) |
 
-Rehbere göre geçerli bir paket için **nitelikli elektronik imza** (P4, CAdES-X Long) ve kurumun **elektronik mührü** (P4, CAdES-A) gerekir. İkisi de bu kütüphanenin dışında sağlanır.
+Rehbere göre geçerli bir 2.x paket için **nitelikli elektronik imza** (P4, CAdES-X Long) ve kurumun **elektronik mührü** (P4, CAdES-A) gerekir. 1.x pakette mühür isteğe bağlıdır. İmza da mühür de bu kütüphanenin dışında sağlanır.
 
 ## Kurulum
 
@@ -96,6 +96,26 @@ use BahriCanli\EYazisma\Contracts\Imzalayici;
 $paket->imzala($imzalayici, $nihaiUstveri)->muhurle($muhurleyici);
 ```
 
+### 2.0 öncesi (1.x) paket
+
+2.0 öncesi paketler hâlâ gönderilip alınıyor. `surum('1.3')` o yapıda paket üretir: tarih ve sayı imzalanan üstverinin parçasıdır ve baştan verilir, bileşen başına tek özet alınır, paket imzayla tamamlanır, mühür gerekmez.
+
+```php
+$paket = Paket::yeni()
+    ->surum('1.3')
+    ->belge(new DateTimeImmutable('2026-10-08'), '06-061-115-2026-22')
+    ->konu('Şenlik daveti')
+    ->olusturan(TuzelSahis::mersis('0123456789012345', 'Örnek Derneği'))
+    ->dagitim(new KurumKurulus('24301050', 'Adalet Bakanlığı'))
+    ->ustYazi(Dosya::yoldan('yazi.pdf'))
+    ->olustur();
+
+$paket->imzaEkle($cades, new NihaiUstveri($tarih, '06-061-115-2026-22', [$imza]));   // imza bilgileri "Belge İmza" bileşenine yazılır
+$paket->asama();                                                                       // PaketAsamasi::Tamamlandi
+```
+
+2.0 ile gelen alanlar (doğrulama adresi, dosya planı, KEP adresi, birim kodu) 1.x pakete yazılmaz; "Yok" güvenlik kodu ve "Acele" ivedilik eski karşılıklarıyla (TSD, IVD) yazılır.
+
 ### Okuma
 
 ```php
@@ -111,7 +131,9 @@ foreach ($paket->ustveri()->ekler as $ek) {
 }
 ```
 
-Şifreli, güncelleme ve 1.x paketlerinde `DesteklenmeyenPaketException`, paket olmayan dosyada `GecersizPaketException` fırlatılır.
+Okuma iki kuşakta da aynıdır: `$paket->surum()` kuşağı (`Surum::V1` / `Surum::V2`) verir, `nihaiUstveri()` 1.x'te tarih ve sayıyı üstveriden, imza bilgilerini "Belge İmza" bileşeninden derler, `hedefler()` "Belge Hedef" bileşenindeki alıcıları döndürür.
+
+Şifreli ve güncelleme paketlerinde `DesteklenmeyenPaketException`, paket olmayan dosyada `GecersizPaketException` fırlatılır.
 
 ### Doğrulama
 
@@ -123,6 +145,8 @@ foreach ($rapor->hatalar() as $bulgu) {
     echo $bulgu;                              // "[K.33] ..."
 }
 ```
+
+1.x paketlerde o kuşağın kuralları uygulanır: tek özet yeter (SHA-1 dahil), nihai özet ve mühür zorunlu değildir.
 
 Denetlenenler: zorunlu bileşenler ve konumları, paket ilişkileri, üstveri ile ek dosyalarının tutarlılığı, `Core` ile üstverinin uyumu, Id biçimleri, paket özeti ve nihai özetteki her özet değerinin bileşen içeriğiyle eşleşmesi, imza ve mührün varlığı. İmza için yalnızca imzalanan bileşenin imza bloğunun içinde geçip geçmediğine bakılır.
 
@@ -154,6 +178,7 @@ $gelen = EYazisma::ac($yol);
 
 - Paket bütünüyle bellekte işlenir; ZIP64 desteklenmez (4 GB sınırı). Okumada açılmış toplam boyut varsayılan olarak 256 MB ile sınırlıdır (`Paket::ac($yol, $boyutSiniri)`).
 - `Core` bileşenine sürüm olarak `2.0` yazılır; `->surum('2.1')` ile değiştirilebilir.
+- 1.x üretiminde 1.3'e özgü `TCYK` alanı ve 1.x mührü üretimi sınanmadı; 1.x okuma, eski İmzager'ın ürettiği gerçek paketlerle denendi.
 - Resmî XSD şemalarıyla çalışma anında doğrulama yapılmaz: şemalar libxml ile yüklenemiyor ve resmî API'nin ürettiği paketler de şemadan birebir geçmiyor. Üretilen XML geliştirme sırasında şemalara karşı denetlenmiştir.
 
 ## Test

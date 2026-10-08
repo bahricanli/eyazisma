@@ -2,6 +2,9 @@
 
 namespace BahriCanli\EYazisma\Xml;
 
+use BahriCanli\EYazisma\Enums\GuvenlikKodu;
+use BahriCanli\EYazisma\Enums\Ivedilik;
+use BahriCanli\EYazisma\Enums\Surum;
 use BahriCanli\EYazisma\Exceptions\EYazismaException;
 use BahriCanli\EYazisma\Model\Dagitim;
 use BahriCanli\EYazisma\Model\Ek;
@@ -28,15 +31,34 @@ use DOMElement;
  */
 final class Yazici
 {
-    public static function ustveri(Ustveri $ustveri): string
+    /** Yazılmakta olan bileşenin kuşağı; ad alanlarını ve kuşağa özgü alanları belirler. */
+    private static Surum $surum = Surum::V2;
+
+    /**
+     * @param  NihaiUstveri|null  $belgeBilgisi  1.x'te tarih ve sayı üstveride yer alır; o kuşak için zorunludur
+     */
+    public static function ustveri(Ustveri $ustveri, Surum $surum = Surum::V2, ?NihaiUstveri $belgeBilgisi = null): string
     {
+        self::$surum = $surum;
+        $eski = $surum === Surum::V1;
+
+        if ($eski && $belgeBilgisi === null) {
+            throw new EYazismaException('1.x üstverisi için belgenin tarihi ve sayısı gerekir.');
+        }
+
         $belge = self::belge();
-        $kok = $belge->appendChild($belge->createElementNS(Ad::USTVERI, 'UstVeri'));
-        $kok->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns:tipler', Ad::TIPLER);
+        $kok = $belge->appendChild($eski ? $belge->createElementNS(Ad::USTVERI_1, 'Ustveri') : $belge->createElementNS(Ad::USTVERI, 'UstVeri'));
+        $kok->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns:tipler', self::tipler());
 
         self::metin($kok, 'BelgeId', $ustveri->belgeId);
         self::metin($kok, 'Konu', $ustveri->konu);
-        self::metin($kok, 'GuvenlikKodu', $ustveri->guvenlikKodu->value);
+
+        if ($eski) {
+            self::metin($kok, 'Tarih', self::tarih($belgeBilgisi->tarih));
+            self::metin($kok, 'BelgeNo', $belgeBilgisi->belgeNo);
+        }
+
+        self::metin($kok, 'GuvenlikKodu', self::guvenlikKodu($ustveri->guvenlikKodu));
         self::metin($kok, 'GuvenlikKoduGecerlilikTarihi', self::tarih($ustveri->guvenlikKoduGecerlilikTarihi));
         self::metin($kok, 'MimeTuru', $ustveri->mimeTuru);
         self::tanimlayici($kok, 'OzId', $ustveri->ozId);
@@ -76,6 +98,11 @@ final class Yazici
 
         self::metin($kok, 'DosyaAdi', $ustveri->dosyaAdi);
 
+        // Dosya planı, hizmet envanteri ve doğrulama adresi 2.0 ile geldi.
+        if ($eski) {
+            return $belge->saveXML();
+        }
+
         if ($ustveri->sdpBilgisi !== null) {
             $sdpBilgisi = self::eleman($kok, 'SdpBilgisi');
             self::sdp(self::eleman($sdpBilgisi, 'AnaSdp'), $ustveri->sdpBilgisi->anaSdp);
@@ -105,8 +132,58 @@ final class Yazici
         return $belge->saveXML();
     }
 
+    /**
+     * "Belge Hedef" bileşeni: paketin elektronik olarak iletileceği alıcılar.
+     *
+     * @param  list<Taraf>  $hedefler
+     */
+    public static function belgeHedef(array $hedefler, Surum $surum = Surum::V2): string
+    {
+        self::$surum = $surum;
+
+        $belge = self::belge();
+        $kok = $belge->appendChild($belge->createElementNS('urn:dpt:eyazisma:schema:xsd:BelgeHedef-'.($surum === Surum::V1 ? '1' : '2'), 'BelgeHedef'));
+        $kok->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns:tipler', self::tipler());
+
+        $liste = self::eleman($kok, 'HedefListesi');
+
+        foreach ($hedefler as $hedef) {
+            self::taraf(self::eleman($liste, 'Hedef'), $hedef);
+        }
+
+        return $belge->saveXML();
+    }
+
+    /**
+     * 1.x'in "Belge İmza" bileşeni: belgedeki imzalara ilişkin bilgi.
+     *
+     * @param  list<Imza>  $imzalar
+     */
+    public static function belgeImza(array $imzalar): string
+    {
+        if ($imzalar === []) {
+            throw new EYazismaException('En az bir imza bilgisi bulunmalıdır.');
+        }
+
+        self::$surum = Surum::V1;
+
+        $belge = self::belge();
+        $kok = $belge->appendChild($belge->createElementNS('urn:dpt:eyazisma:schema:xsd:BelgeImza-1', 'BelgeImza'));
+        $kok->setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns:tipler', self::tipler());
+
+        $liste = self::eleman($kok, 'ImzaListesi');
+
+        foreach ($imzalar as $imza) {
+            self::imza($liste, $imza);
+        }
+
+        return $belge->saveXML();
+    }
+
     public static function nihaiUstveri(NihaiUstveri $nihaiUstveri): string
     {
+        self::$surum = Surum::V2;
+
         if ($nihaiUstveri->imzalar === []) {
             throw new EYazismaException('Nihai üstveride en az bir imza bilgisi bulunmalıdır.');
         }
@@ -134,21 +211,25 @@ final class Yazici
      * @param  string  $paketId  özeti alınan paketin Id değeri
      * @param  list<OzetReferansi>  $referanslar
      */
-    public static function ozet(string $kok, string $paketId, array $referanslar): string
+    public static function ozet(string $kok, string $paketId, array $referanslar, Surum $surum = Surum::V2): string
     {
+        $eski = $surum === Surum::V1;
+        $adAlani = $eski ? Ad::PAKET_OZETI_1 : Ad::PAKET_OZETI;
+
         $belge = self::belge();
-        $eleman = $belge->appendChild($belge->createElementNS(Ad::ozet($kok), $kok));
+        $eleman = $belge->appendChild($belge->createElementNS($eski ? Ad::eskiOzet($kok) : Ad::ozet($kok), $kok));
         $eleman->setAttribute('Id', $paketId);
 
         foreach ($referanslar as $referans) {
-            $satir = $eleman->appendChild($belge->createElementNS(Ad::PAKET_OZETI, 'Reference'));
+            $satir = $eleman->appendChild($belge->createElementNS($adAlani, 'Reference'));
             $satir->setAttribute('URI', $referans->uri);
             $satir->setAttribute('Type', $referans->tur);
 
-            foreach ($referans->ozetler as $ozet) {
-                $kalem = $satir->appendChild($belge->createElementNS(Ad::PAKET_OZETI, 'DigestItem'));
-                $kalem->appendChild($belge->createElementNS(Ad::PAKET_OZETI, 'DigestMethod'))->setAttribute('Algorithm', $ozet->algoritma);
-                $kalem->appendChild($belge->createElementNS(Ad::PAKET_OZETI, 'DigestValue'))->appendChild($belge->createTextNode($ozet->deger));
+            // 1.x'te bileşen başına tek özet vardır ve doğrudan referansın altında durur.
+            foreach ($eski ? array_slice($referans->ozetler, 0, 1) : $referans->ozetler as $ozet) {
+                $kalem = $eski ? $satir : $satir->appendChild($belge->createElementNS($adAlani, 'DigestItem'));
+                $kalem->appendChild($belge->createElementNS($adAlani, 'DigestMethod'))->setAttribute('Algorithm', $ozet->algoritma);
+                $kalem->appendChild($belge->createElementNS($adAlani, 'DigestValue'))->appendChild($belge->createTextNode($ozet->deger));
             }
         }
 
@@ -157,6 +238,8 @@ final class Yazici
 
     public static function core(PaketOzellikleri $ozellikler): string
     {
+        self::$surum = Surum::V2;
+
         $belge = self::belge();
         $kok = $belge->appendChild($belge->createElementNS(Ad::CORE, 'coreProperties'));
 
@@ -193,9 +276,25 @@ final class Yazici
         return new DOMDocument('1.0', 'UTF-8');
     }
 
+    private static function tipler(): string
+    {
+        return self::$surum === Surum::V1 ? 'urn:dpt:eyazisma:schema:xsd:Tipler-1' : Ad::TIPLER;
+    }
+
+    /** 2.0 ile değişen kodların 1.x karşılığı. */
+    private static function guvenlikKodu(GuvenlikKodu $kod): string
+    {
+        return self::$surum === Surum::V1 && $kod === GuvenlikKodu::Yok ? GuvenlikKodu::TasnifDisi->value : $kod->value;
+    }
+
+    private static function ivedilik(Ivedilik $ivedilik): string
+    {
+        return self::$surum === Surum::V1 && $ivedilik === Ivedilik::Acele ? Ivedilik::Ivedi->value : $ivedilik->value;
+    }
+
     private static function eleman(DOMElement $ust, string $ad): DOMElement
     {
-        return $ust->appendChild($ust->ownerDocument->createElementNS(Ad::TIPLER, 'tipler:'.$ad));
+        return $ust->appendChild($ust->ownerDocument->createElementNS(self::tipler(), 'tipler:'.$ad));
     }
 
     private static function metin(DOMElement $ust, string $ad, ?string $deger): ?DOMElement
@@ -246,7 +345,7 @@ final class Yazici
             self::metin($eleman, 'KKK', $taraf->kkk);
             self::metin($eleman, 'Adi', $taraf->adi);
             self::iletisim($eleman, $taraf->iletisimBilgisi);
-            self::metin($eleman, 'BirimKKK', $taraf->birimKkk);
+            self::metin($eleman, 'BirimKKK', self::$surum === Surum::V1 ? null : $taraf->birimKkk);
         } elseif ($taraf instanceof GercekSahis) {
             self::gercekSahis($ust, 'GercekSahis', $taraf);
         } elseif ($taraf instanceof TuzelSahis) {
@@ -287,7 +386,7 @@ final class Yazici
         self::metin($eleman, 'Telefon', $iletisim->telefon);
         self::metin($eleman, 'TelefonDiger', $iletisim->telefonDiger);
         self::metin($eleman, 'EPosta', $iletisim->ePosta);
-        self::metin($eleman, 'KepAdresi', $iletisim->kepAdresi);
+        self::metin($eleman, 'KepAdresi', self::$surum === Surum::V1 ? null : $iletisim->kepAdresi);
         self::metin($eleman, 'Faks', $iletisim->faks);
         self::metin($eleman, 'WebAdresi', $iletisim->webAdresi);
         self::metin($eleman, 'Adres', $iletisim->adres);
@@ -300,7 +399,7 @@ final class Yazici
     {
         $eleman = self::eleman($ust, 'Dagitim');
         self::taraf($eleman, $dagitim->taraf);
-        self::metin($eleman, 'Ivedilik', $dagitim->ivedilik->value);
+        self::metin($eleman, 'Ivedilik', self::ivedilik($dagitim->ivedilik));
         self::metin($eleman, 'DagitimTuru', $dagitim->dagitimTuru->value);
         self::metin($eleman, 'Miat', $dagitim->miat);
 

@@ -7,11 +7,13 @@ use BahriCanli\EYazisma\Enums\EkTuru;
 use BahriCanli\EYazisma\Enums\GuvenlikKodu;
 use BahriCanli\EYazisma\Enums\Ivedilik;
 use BahriCanli\EYazisma\Enums\OzetAlgoritmasi;
+use BahriCanli\EYazisma\Enums\Surum;
 use BahriCanli\EYazisma\Exceptions\EYazismaException;
 use BahriCanli\EYazisma\Model\Dagitim;
 use BahriCanli\EYazisma\Model\Ek;
 use BahriCanli\EYazisma\Model\Heysk;
 use BahriCanli\EYazisma\Model\Ilgi;
+use BahriCanli\EYazisma\Model\NihaiUstveri;
 use BahriCanli\EYazisma\Model\Ozet;
 use BahriCanli\EYazisma\Model\PaketOzellikleri;
 use BahriCanli\EYazisma\Model\Sdp;
@@ -51,6 +53,13 @@ final class PaketOlusturucu
     private ?SdpBilgisi $sdpBilgisi = null;
 
     private string $surum = Paket::SURUM;
+
+    private ?DateTimeImmutable $tarih = null;
+
+    private ?string $belgeNo = null;
+
+    /** @var list<Taraf>|null */
+    private ?array $hedefler = null;
 
     /** @var list<Dagitim> */
     private array $dagitimlar = [];
@@ -294,7 +303,8 @@ final class PaketOlusturucu
     }
 
     /**
-     * "Core" bileşenine yazılacak e-Yazışma Teknik Rehberi sürümü (varsayılan Paket::SURUM).
+     * Paketin uyacağı e-Yazışma Teknik Rehberi sürümü (varsayılan Paket::SURUM). "1" ile başlayan
+     * sürüm (ör. "1.3") 2.0 öncesi yapıda paket üretir: tarih ve sayı üstveriye yazılır, mühür gerekmez.
      */
     public function surum(string $surum): static
     {
@@ -303,13 +313,39 @@ final class PaketOlusturucu
         return $this;
     }
 
+    /**
+     * Belgenin tarihi ve sayısı. Yalnız 1.x paketlerde oluştururken verilir, çünkü o kuşakta
+     * imzalanan üstverinin parçasıdır; 2.x'te imzayla birlikte nihai üstveride verilir.
+     */
+    public function belge(DateTimeInterface $tarih, string $belgeNo): static
+    {
+        $this->tarih = DateTimeImmutable::createFromInterface($tarih);
+        $this->belgeNo = $belgeNo;
+
+        return $this;
+    }
+
+    /**
+     * 1.x paketlerde paketin elektronik olarak iletileceği alıcılar; verilmezse dağıtımdaki herkes.
+     */
+    public function hedefler(Taraf ...$hedefler): static
+    {
+        $this->hedefler = array_values($hedefler);
+
+        return $this;
+    }
+
     public function olustur(): Paket
     {
+        $eski = str_starts_with($this->surum, '1');
+        $kusak = $eski ? Surum::V1 : Surum::V2;
+
         $eksikler = array_keys(array_filter([
             'konu' => $this->konu === null || $this->konu === '',
             'oluşturan' => $this->olusturan === null,
             'en az bir dağıtım' => $this->dagitimlar === [],
-            'doğrulama adresi' => $this->dogrulamaAdresi === null || $this->dogrulamaAdresi === '',
+            'doğrulama adresi' => ! $eski && ($this->dogrulamaAdresi === null || $this->dogrulamaAdresi === ''),
+            'belgenin tarihi ve sayısı' => $eski && ($this->tarih === null || $this->belgeNo === null || $this->belgeNo === ''),
             'üst yazı' => $this->ustYazi === null,
         ]));
 
@@ -325,6 +361,13 @@ final class PaketOlusturucu
         $opc->put($ustYazi, $this->ustYazi->icerik, $this->ustYazi->mimeTuru);
         $opc->relate('', Ad::ILISKI_USTYAZI, $ustYazi, 'IdUstYazi');
         $imzalananlar[] = $ustYazi;
+
+        if ($eski) {
+            $belgeHedef = '/BelgeHedef/BelgeHedef.xml';
+            $opc->put($belgeHedef, Yazici::belgeHedef($this->hedefler ?? array_map(fn (Dagitim $dagitim) => $dagitim->taraf, $this->dagitimlar), Surum::V1));
+            $opc->relate('', Ad::ILISKI_BELGE_HEDEF, $belgeHedef, 'IdBelgeHedef');
+            $imzalananlar[] = $belgeHedef;
+        }
 
         $ekler = [];
 
@@ -350,7 +393,7 @@ final class PaketOlusturucu
             dosyaAdi: basename($ustYazi),
             olusturan: $this->olusturan,
             dagitimlar: $this->dagitimlar,
-            dogrulamaAdresi: $this->dogrulamaAdresi,
+            dogrulamaAdresi: $this->dogrulamaAdresi ?? '',
             guvenlikKodu: $this->guvenlikKodu,
             guvenlikKoduGecerlilikTarihi: $this->guvenlikKoduGecerlilikTarihi,
             ozId: $this->ozId,
@@ -360,7 +403,7 @@ final class PaketOlusturucu
             ilgililer: $this->ilgililer,
             sdpBilgisi: $this->sdpBilgisi,
             heyskler: $this->heyskler,
-        )));
+        ), $kusak, $eski ? new NihaiUstveri($this->tarih, $this->belgeNo, []) : null));
         $opc->relate('', Ad::ILISKI_USTVERI, Ad::PARCA_USTVERI, 'IdUstveri');
 
         $core = '/package/services/metadata/core-properties/'.bin2hex(random_bytes(16)).'.psmdcp';
@@ -379,7 +422,8 @@ final class PaketOlusturucu
         $opc->put(Ad::PARCA_PAKET_OZETI, Yazici::ozet(
             'PaketOzeti',
             $belgeId,
-            Paket::referanslar($opc, $imzalananlar, $this->ozetAlgoritmalari),
+            Paket::referanslar($opc, $imzalananlar, $eski ? [OzetAlgoritmasi::Sha256] : $this->ozetAlgoritmalari),
+            $kusak,
         ));
         $opc->relate('', Ad::ILISKI_PAKET_OZETI, Ad::PARCA_PAKET_OZETI, 'IdPaketOzeti');
 

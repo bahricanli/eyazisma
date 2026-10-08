@@ -6,6 +6,7 @@ use BahriCanli\EYazisma\Enums\DagitimTuru;
 use BahriCanli\EYazisma\Enums\EkTuru;
 use BahriCanli\EYazisma\Enums\GuvenlikKodu;
 use BahriCanli\EYazisma\Enums\Ivedilik;
+use BahriCanli\EYazisma\Enums\Surum;
 use BahriCanli\EYazisma\Exceptions\GecersizPaketException;
 use BahriCanli\EYazisma\Model\Dagitim;
 use BahriCanli\EYazisma\Model\Ek;
@@ -58,9 +59,23 @@ final class Okuyucu
         return $belge;
     }
 
+    /**
+     * Üstveri bileşeninin kuşağı; tanınmayan şemada null.
+     */
+    public static function surum(string $ustveriXml): ?Surum
+    {
+        return match (self::belge($ustveriXml, 'Üstveri')->documentElement->namespaceURI) {
+            Ad::USTVERI => Surum::V2,
+            Ad::USTVERI_1 => Surum::V1,
+            default => null,
+        };
+    }
+
     public static function ustveri(string $xml): Ustveri
     {
-        $kok = self::kok($xml, 'Üstveri', 'UstVeri', Ad::USTVERI);
+        $kok = self::surum($xml) === Surum::V1
+            ? self::kok($xml, 'Üstveri', 'Ustveri', Ad::USTVERI_1)
+            : self::kok($xml, 'Üstveri', 'UstVeri', Ad::USTVERI);
         $sdpBilgisi = self::cocuk($kok, 'SdpBilgisi');
 
         return new Ustveri(
@@ -89,6 +104,33 @@ final class Okuyucu
         );
     }
 
+    /**
+     * 1.x'te nihai üstverinin karşılığı: tarih ve sayı üstveriden, imza bilgileri "Belge İmza" bileşeninden gelir.
+     */
+    public static function eskiNihaiUstveri(string $ustveriXml, ?string $belgeImzaXml): NihaiUstveri
+    {
+        $kok = self::kok($ustveriXml, 'Üstveri', 'Ustveri', Ad::USTVERI_1);
+        $imzalar = $belgeImzaXml === null ? null : self::cocuk(self::belge($belgeImzaXml, 'Belge İmza')->documentElement, 'ImzaListesi');
+
+        return new NihaiUstveri(
+            tarih: self::tarih($kok, 'Tarih') ?? throw new GecersizPaketException('Üstveri bileşeninde Tarih yok.'),
+            belgeNo: self::zorunlu($kok, 'BelgeNo'),
+            imzalar: array_map(self::imza(...), self::cocuklar($imzalar, 'Imza')),
+        );
+    }
+
+    /**
+     * "Belge Hedef" bileşeni: paketin elektronik olarak iletileceği alıcılar.
+     *
+     * @return list<Taraf>
+     */
+    public static function belgeHedef(string $xml): array
+    {
+        $liste = self::cocuk(self::belge($xml, 'Belge Hedef')->documentElement, 'HedefListesi');
+
+        return array_map(self::taraf(...), self::cocuklar($liste, 'Hedef'));
+    }
+
     public static function nihaiUstveri(string $xml): NihaiUstveri
     {
         $kok = self::kok($xml, 'Nihai Üstveri', 'NihaiUstVeri', Ad::NIHAI_USTVERI);
@@ -106,7 +148,12 @@ final class Okuyucu
      */
     public static function ozet(string $xml, string $kok): array
     {
-        $eleman = self::kok($xml, $kok, $kok, Ad::ozet($kok));
+        $eleman = self::belge($xml, $kok)->documentElement;
+
+        if ($eleman->localName !== $kok || ! in_array($eleman->namespaceURI, [Ad::ozet($kok), Ad::eskiOzet($kok)], true)) {
+            throw new GecersizPaketException("{$kok} bileşeni tanınan bir şemaya uymuyor.");
+        }
+
         $referanslar = [];
 
         foreach (self::cocuklar($eleman, 'Reference') as $referans) {
@@ -117,7 +164,8 @@ final class Okuyucu
                         self::cocuk($kalem, 'DigestMethod')?->getAttribute('Algorithm') ?? '',
                         preg_replace('/\s+/', '', self::metin($kalem, 'DigestValue') ?? ''),
                     ),
-                    self::cocuklar($referans, 'DigestItem')
+                    // 1.x'te özet doğrudan referansın altındadır.
+                    self::cocuklar($referans, 'DigestItem') ?: [$referans]
                 ),
                 $referans->getAttribute('Type') ?: OzetReferansi::DAHILI,
             );
@@ -186,16 +234,17 @@ final class Okuyucu
         return self::cocuk($ust, $ad) ?? throw new GecersizPaketException("{$ust->localName} içinde {$ad} elemanı yok.");
     }
 
+    /** Elemanın metni; eleman yoksa ya da boşsa null (eski araçlar boş elemanlar yazar). */
     private static function metin(?DOMElement $ust, string $ad): ?string
     {
-        $cocuk = self::cocuk($ust, $ad);
+        $metin = trim(self::cocuk($ust, $ad)?->textContent ?? '');
 
-        return $cocuk === null ? null : trim($cocuk->textContent);
+        return $metin === '' ? null : $metin;
     }
 
     private static function zorunlu(DOMElement $ust, string $ad): string
     {
-        return self::metin($ust, $ad) ?? throw new GecersizPaketException("{$ust->localName} içinde {$ad} elemanı yok.");
+        return trim(self::zorunluCocuk($ust, $ad)->textContent);
     }
 
     private static function tarih(DOMElement $ust, string $ad): ?DateTimeImmutable
@@ -296,7 +345,7 @@ final class Okuyucu
             return null;
         }
 
-        return new IletisimBilgisi(
+        $bilgi = new IletisimBilgisi(
             self::metin($eleman, 'Telefon'),
             self::metin($eleman, 'TelefonDiger'),
             self::metin($eleman, 'EPosta'),
@@ -308,6 +357,8 @@ final class Okuyucu
             self::metin($eleman, 'Ilce'),
             self::metin($eleman, 'Ulke'),
         );
+
+        return array_filter(get_object_vars($bilgi), fn ($deger) => $deger !== null) === [] ? null : $bilgi;
     }
 
     private static function dagitim(DOMElement $eleman): Dagitim
