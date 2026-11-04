@@ -15,10 +15,13 @@ final class OpenSslImzalayici implements Imzalayici
 
     private mixed $sertifika;
 
-    public function __construct()
+    /**
+     * @param  array<string, string>  $konu
+     */
+    public function __construct(array $konu = ['commonName' => 'e-Yazışma Test'])
     {
         $this->anahtar = openssl_pkey_new(['private_key_bits' => 2048, 'private_key_type' => OPENSSL_KEYTYPE_RSA]);
-        $istek = openssl_csr_new(['commonName' => 'e-Yazışma Test'], $this->anahtar, ['digest_alg' => 'sha256']);
+        $istek = openssl_csr_new($konu, $this->anahtar, ['digest_alg' => 'sha256']);
         $this->sertifika = openssl_csr_sign($istek, null, $this->anahtar, 1, ['digest_alg' => 'sha256']);
     }
 

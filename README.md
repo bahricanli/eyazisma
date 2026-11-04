@@ -88,6 +88,21 @@ $paket->muhurEkle(/* CAdES tümleşik mühür */)->kaydet($yol);
 $paket->asama();                              // PaketAsamasi::Tamamlandi
 ```
 
+### Birden çok imzacı
+
+Rehbere göre pakette tek "Elektronik İmza" bileşeni bulunur; birden çok imzacı aynı CAdES bloğunun içinde yer alır. İmzacılar paket özetini ayrı ayrı imzalayabilir, bloklar sonra birleştirilir:
+
+```php
+use BahriCanli\EYazisma\Cades\Cades;
+
+$sertifikalar = Cades::imzacilar($cades, $paket->paketOzeti());   // imza bu içeriği imzalamış mı; imzacıların sertifikaları
+$sertifikalar[0]->tckn();                                          // nitelikli sertifikada konu seri numarası
+
+$paket->imzaEkle(Cades::birlestir($birinci, $ikinci), $nihaiUstveri);
+```
+
+`imzacilar()` yalnız imzanın matematiğine ve imzalanan içeriğe bakar; sertifika zinciri, iptal durumu, zaman damgası ve CAdES profili denetlenmez. `ext-openssl` gerekir.
+
 İmza ve mührü kodla atabiliyorsanız `Imzalayici` sözleşmesini uygulayın:
 
 ```php

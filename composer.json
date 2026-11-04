@@ -31,6 +31,7 @@
         "phpunit/phpunit": "^11.0 || ^12.0"
     },
     "suggest": {
+        "ext-openssl": "Cades::imzacilar() ile imza ve imzacı denetimi için",
         "illuminate/support": "Laravel servis sağlayıcısı ve facade için (^10.0 || ^11.0 || ^12.0 || ^13.0)"
     },
     "autoload": {
