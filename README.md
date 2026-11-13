@@ -9,7 +9,9 @@ Paket yapısı Cumhurbaşkanlığı'nın yayımladığı [e-Yazışma Teknik Reh
 | Yapar | Yapmaz |
 |---|---|
 | Şifresiz paket üretir: üst yazı, üstveri, ekler, `Core`, özetler; 2.x ya da 1.x yapısında | Elektronik imza ya da mühür **üretmez**; dışarıda atılan CAdES imzayı pakete ekler |
-| Paketi okur: üstveri, nihai üstveri, üst yazı, ek dosyaları, imza ve mühür | İmzayı kriptografik olarak **doğrulamaz** (sertifika zinciri, iptal, zaman damgası, CAdES profili) |
+| Paketi okur: üstveri, nihai üstveri, üst yazı, ek dosyaları, imza ve mühür | CAdES-X Long ve CAdES-A **profillerini üretmez**; imzaya en fazla zaman damgası (CAdES-T) ekler |
+| İmzayı denetler: imzalanan içerik, sertifika zinciri (verilen köklere), OCSP ya da CRL ile iptal durumu, imza zaman damgası | Kök sertifika taşımaz; ara sertifikaların iptalini denetlemez |
+| RFC 3161 zaman damgası alır (TÜRKTRUST gibi HTTP Basic, Kamu SM `identity` başlığı) | |
 | Paketi rehberin kurallar listesine göre denetler, özet değerlerini yeniden hesaplar | Şifreli paket (`.eyps`) ve güncelleme paketini (`.eypg`) işlemez |
 | Paketi imza adımları arasında kaydedip sürdürür | Paraf özeti ve paraf imzası üretmez (okuduğu pakette varsa özet denetimlerinde hesaba katar) |
 
@@ -165,6 +167,29 @@ foreach ($rapor->hatalar() as $bulgu) {
 
 Denetlenenler: zorunlu bileşenler ve konumları, paket ilişkileri, üstveri ile ek dosyalarının tutarlılığı, `Core` ile üstverinin uyumu, Id biçimleri, paket özeti ve nihai özetteki her özet değerinin bileşen içeriğiyle eşleşmesi, imza ve mührün varlığı. İmza için yalnızca imzalanan bileşenin imza bloğunun içinde geçip geçmediğine bakılır.
 
+### Zaman damgası ve sertifika denetimi
+
+```php
+use BahriCanli\EYazisma\Cades\Cades;
+use BahriCanli\EYazisma\Denetim\ImzaDenetleyici;
+use BahriCanli\EYazisma\Denetim\SertifikaDenetleyici;
+use BahriCanli\EYazisma\ZamanDamgasi\Rfc3161;
+
+// TÜRKTRUST: HTTP Basic. Kamu SM: 'kamusm' (kullanıcı müşteri numarasıdır).
+$zds = new Rfc3161('http://timestamp.turktrust.com.tr', $kullanici, $parola, 'basic');
+$imza = Cades::zamanDamgasiEkle($imza, $zds);       // her imzacıya CAdES-T damgası
+
+$denetleyici = new ImzaDenetleyici(SertifikaDenetleyici::dizinden('/yol/kok-sertifikalar'));
+
+foreach ($denetleyici->denetle($imza, $paket->paketOzeti()) as $imzaci) {
+    $imzaci->sertifikaDenetimi->gecerli();   // zincir + süre + iptal (imza anında)
+    $imzaci->sertifikaDenetimi->ozet();      // "Sertifika geçerli; OCSP ile ..."
+    $imzaci->damga?->zaman;                  // imza zaman damgası
+}
+```
+
+İmza anı, imzanın zaman damgası varsa damganın zamanıdır; imzadan sonra iptal edilen sertifikanın imzası geçerli sayılır. İptal sunucusuna ulaşılamazsa durum `Bilinmiyor` olur, imza reddedilmez (`reddedilmeli()` false). HTTP istekleri `Contracts\HttpIstemci` ile değiştirilebilir.
+
 ## Laravel
 
 Servis sağlayıcı kendiliğinden keşfedilir. Yapılandırmayı yayımlamak için:
@@ -194,6 +219,8 @@ $gelen = EYazisma::ac($yol);
 - Paket bütünüyle bellekte işlenir; ZIP64 desteklenmez (4 GB sınırı). Okumada açılmış toplam boyut varsayılan olarak 256 MB ile sınırlıdır (`Paket::ac($yol, $boyutSiniri)`).
 - `Core` bileşenine sürüm olarak `2.0` yazılır; `->surum('2.1')` ile değiştirilebilir.
 - 1.x üretiminde 1.3'e özgü `TCYK` alanı ve 1.x mührü üretimi sınanmadı; 1.x okuma, eski İmzager'ın ürettiği gerçek paketlerle denendi.
+- Zaman damgası sahte bir ZDS ile sınandı; TÜRKTRUST ve Kamu SM sunucularıyla canlı denenmedi. Kamu SM'nin `identity` başlığı yayımlanmış bir belgeye değil, istemcisinin davranışına göre yazıldı.
+- OCSP ve CRL denetimi yalnız yaprak sertifika içindir; delta CRL ve dolaylı CRL desteklenmez.
 - Resmî XSD şemalarıyla çalışma anında doğrulama yapılmaz: şemalar libxml ile yüklenemiyor ve resmî API'nin ürettiği paketler de şemadan birebir geçmiyor. Üretilen XML geliştirme sırasında şemalara karşı denetlenmiştir.
 
 ## Test
